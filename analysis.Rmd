@@ -204,19 +204,19 @@ plot(clust, labels = mods$Genotype)
 abline(h = c(1.1, 1.37, 1.7), lty = 2)
 geno_groups <- tibble(
   Genotype = mods$Genotype,
-  cgrp = factor(cutree(clust, h = 1.7)))
+  group = factor(cutree(clust, h = 1.7)))
 
 # Combine based on groupings
 cmods <- df %>%
   left_join(geno_groups) %>%
-  group_by(cgrp) %>%
+  group_by(group) %>%
   nest(data = c(Date, Genotype, Tank, Final_Temp, Time, rep, fvfm, rfvfm)) %>%
   mutate( mod = map(data, ~ glm(rfvfm ~ log10(Final_Temp), data = ., family = "quasibinomial")),
          pred = map(mod, ~ data.frame(lsmeans(., specs = "Final_Temp", at = list(Final_Temp = seq(30, 40, 0.1)),
                                    type = "response"))),
          ld50 = map_dbl(mod, ~ 10^(MASS::dose.p(., p = 0.5)))) %>%
   ungroup() %>%
-  mutate(cgrp = factor(cgrp, levels = cgrp[order(-ld50)]))
+  mutate(group = factor(group, levels = group[order(-ld50)]))
 
 # Plot data points, fits, and ld50 for each genotype
 cmods %>%
@@ -227,7 +227,7 @@ cmods %>%
   geom_point(data = unnest(cmods, data), aes(y = rfvfm)) +
   geom_segment(aes(x = ld50, xend = ld50, y = 0, yend = 0.5), lwd = 0.2, lty = 2) +
   geom_segment(aes(x = min(Final_Temp), xend = ld50, y = 0.5, yend = 0.5), lwd = 0.2, lty = 2) +
-  facet_wrap(~ cgrp, labeller = label_both) +
+  facet_wrap(~ group, labeller = label_both) +
   geom_text(aes(x = ld50, y = 0.05, label = round(ld50, 1)), hjust = 1, nudge_x = -0.2) +
   scale_x_continuous(breaks = seq(30, 40, 1), minor_breaks = seq(30, 40, 1)) +
   scale_color_gradient(low = "blue", high = "red") +
@@ -235,12 +235,12 @@ cmods %>%
        shape = "Date of run", color = "Tolerance (°C, LD50)")
 
 # Use LD50 ratios to test for differences between genotypes
-ratio.tests <- t(apply(t(combn(cmods$cgrp, 2)), 1, sort)) %>%   # Get all combinations of 2 genotypes
+ratio.tests <- t(apply(t(combn(cmods$group, 2)), 1, sort)) %>%   # Get all combinations of 2 genotypes
   tibble(g1 = .[,1], g2 = .[,2]) %>%
   select(g1, g2) %>%
   mutate(res = map2(g1, g2, ~ ratio_test(p = 50,     # Run ratio test on all pairwise comparisons
-                    model_1 = filter(cmods, cgrp == .x) %>% pluck("mod", 1),
-                    model_2 = filter(cmods, cgrp == .y) %>% pluck("mod", 1))))
+                    model_1 = filter(cmods, group == .x) %>% pluck("mod", 1),
+                    model_2 = filter(cmods, group == .y) %>% pluck("mod", 1))))
 
 # Extract results of ratio tests
 res <- ratio.tests %>%
@@ -255,26 +255,32 @@ res <- res %>%
 # Get statistical group letters from pairwise comparisons
 grouplett <- cldList(padj ~ comparison, data = res, threshold = 0.05, 
                      remove.zero = FALSE, reversed = FALSE) %>%
-  rename(cgrp = Group)
+  rename(group = Group)
 
 # Add statistical group letters to data frame and prepare for plotting
 cmods2 <- full_join(cmods, grouplett) %>%
   arrange(-ld50) %>%
   mutate(ld50l = sprintf("%.1f", round(ld50, 1))) %>%                      # Round  ld50 to one decimal
-  unite(label, cgrp, MonoLetter, sep = " / ", remove = FALSE) %>%   # Create label column
-  mutate_at(vars(cgrp, label), ~ factor(., levels = .[order(Letter)]))     # Relevel factors in order by LD50
+  unite(label, group, MonoLetter, sep = " / ", remove = FALSE) %>%   # Create label column
+  mutate_at(vars(group, label), ~ factor(., levels = .[order(Letter)]))     # Relevel factors in order by LD50
 
 # Plot fitted models and data points
 cmods2 %>%
   unnest(pred) %>%
-  ggplot(aes(x = Final_Temp, y = prob, color = label)) +
+  ggplot(aes(x = Final_Temp, y = prob, group = label, color = label)) +
   geom_ribbon(aes(ymin = asymp.LCL, ymax = asymp.UCL, linetype = NA), alpha = 0.2) +
   geom_line() +
   geom_segment(aes(x = ld50, xend = ld50, y = 0, yend = 0.5), lwd = 0.2, lty = 2) +
   geom_segment(aes(x = min(Final_Temp), xend = ld50, y = 0.5, yend = 0.5), lwd = 0.2, lty = 2) +
   geom_text(aes(x = ld50, y = 0.01, label = round(ld50, 1)), hjust = 1, nudge_x = -0.05, size = 3) +
-  scale_color_discrete(name = "Group / stat") +
+  scale_color_manual(values = c("#FF0000", "#C6008E", "#8800D2", "#0000FF")) +
   theme(legend.text = element_text(family = "mono")) +
-  labs(x = "Temperature (°C)", y = "Relative Fv/Fm")
+  labs(x = "Temperature (°C)", y = "Relative Fv/Fm", color = "Group / stat")
+
+# Which genos are in which group?
+geno_groups %>%
+  group_by(group) %>%
+  summarise(n_genotypes = n(), genotypes = paste0(Genotype, collapse = ", ")) %>%
+  knitr::kable()
 ```
 
